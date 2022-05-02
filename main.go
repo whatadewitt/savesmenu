@@ -14,7 +14,7 @@ import (
 func tweet(s string) ([]byte, error) {
 	fmt.Println(s)
 	client := http.Client{
-		Timeout: time.Second * 2, // Timeout after 2 seconds
+		Timeout: time.Second * 10, // Timeout after 2 seconds
 	}
 
 	req, err := http.NewRequest(http.MethodPost, "https://api.twitter.com/2/tweets", nil)
@@ -22,17 +22,11 @@ func tweet(s string) ([]byte, error) {
 		fmt.Println("AHHHH")
 		log.Fatal(err)
 	}
-	fmt.Println("1")
 
-	req.Header.Set("Authorization", "AAAAAAAAAAAAAAAAAAAAABaKcAEAAAAAjOfhGgxlNxolQq27n8sf%2FE8aue4%3DXYANE03WG6dj1Da0c1pRCfPZJISzwSaQlSzJvyAXrJLpSaK7Ox")
+	req.Header.Set("Authorization", "XXX")
 
-	fmt.Println("1a")
 	res, postErr := client.Do(req)
-	fmt.Println("2")
 	if postErr != nil {
-		fmt.Println("3")
-		fmt.Println("AHHHH")
-		fmt.Sprintf("%+v", postErr)
 		log.Fatal(postErr)
 		return make([]byte, 0), postErr
 	}
