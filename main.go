@@ -9,37 +9,39 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/dghubble/oauth1"
+	"github.com/joho/godotenv"
 )
 
 func tweet(s string) ([]byte, error) {
+	config := oauth1.NewConfig(os.Getenv("TWITTER_API_KEY"), os.Getenv("TWITTER_API_SECRET"))
+	token := oauth1.NewToken(os.Getenv("TWITTER_CLIENT_KEY"), os.Getenv("TWITTER_CLIENT_SECRET"))
+
+	client := config.Client(oauth1.NoContext, token)
+
 	fmt.Println(s)
-	client := http.Client{
-		Timeout: time.Second * 10, // Timeout after 2 seconds
-	}
 
-	req, err := http.NewRequest(http.MethodPost, "https://api.twitter.com/2/tweets", nil)
+	twitterUrl := "https://api.twitter.com/2/tweets"
+
+	payload := strings.NewReader(fmt.Sprintf(`{ "text": "%v" }`, s))
+
+	fmt.Println(payload)
+
+	res, err := client.Post(twitterUrl, "application/json", payload)
 	if err != nil {
-		fmt.Println("AHHHH")
-		log.Fatal(err)
+		fmt.Println(err)
+		return nil, err
+	}
+	defer res.Body.Close()
+
+	body, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		fmt.Println(err)
+		return nil, err
 	}
 
-	req.Header.Set("Authorization", "XXX")
-
-	res, postErr := client.Do(req)
-	if postErr != nil {
-		log.Fatal(postErr)
-		return make([]byte, 0), postErr
-	}
-	fmt.Println("4")
-
-	fmt.Sprintf("%+v", res)
-
-	if res.Body != nil {
-		defer res.Body.Close()
-	}
-
-	fmt.Println("HIT")
-	return ioutil.ReadAll(res.Body)
+	return body, nil
 }
 
 // call the mlb api (or well... the endpoint)
@@ -202,6 +204,10 @@ func parseGameData(game ScheduleGame, c chan CloserNews) {
 	// if bottom look at away team pitchers
 	// we can sort that out later
 
+	teams := make(map[int]string)
+	teams[data.GameData.Teams.Home.ID] = data.GameData.Teams.Home.Abbreviation
+	teams[data.GameData.Teams.Away.ID] = data.GameData.Teams.Away.Abbreviation
+
 	players := box.Teams.Home.Players
 	for k, v := range box.Teams.Away.Players {
 		players[k] = v
@@ -224,10 +230,25 @@ func parseGameData(game ScheduleGame, c chan CloserNews) {
 			case v.Stats.Pitching.BlownSaves:
 				stat = "Blown Save"
 				count = v.SeasonStats.Pitching.BlownSaves
+			case v.Stats.Pitching.Losses:
+				stat = "Loss"
+				count = v.SeasonStats.Pitching.Losses
 			}
 
+			inning := data.LiveData.Plays.About.Inning
+			halfInning := data.LiveData.Plays.About.HalfInning
+			gameInning := fmt.Sprintf("%v %v", halfInning, inning)
+
+			// TODO: check here for game end too
+			if 9 >= inning {
+				if ("top" == halfInning && box.Teams.Home.TeamStats.Batting.Runs > box.Teams.Away.TeamStats.Batting.Runs) || ("bottom" == halfInning && box.Teams.Home.TeamStats.Batting.Runs != box.Teams.Away.TeamStats.Batting.Runs) {
+					gameInning = "Final"
+				}
+			}
+
+			// TODO: not final...
 			c <- CloserNews{
-				Tweet: fmt.Sprintf("%v (%v) - %v (%v)\n%v\n\nFinal: %v", v.Person.FullName, "TEAM", stat, count, getPitcherStatLine(&v), getGameScoreString(box)),
+				Tweet: fmt.Sprintf(`%v (%v) - %v (%v)\n%v\n\%v: %v`, v.Person.FullName, teams[v.ParentTeamID], stat, count, getPitcherStatLine(&v), gameInning, getGameScoreString(box)),
 				Game:  game,
 			}
 		}
@@ -247,8 +268,10 @@ func parseGameData(game ScheduleGame, c chan CloserNews) {
 }
 
 func main() {
+	godotenv.Load()
+
 	gameDay := time.Now()
-	gameDay = gameDay.AddDate(0, 0, -1)
+	// gameDay = gameDay.AddDate(0, 0, -1)
 	data, err := parseScoreboardData(gameDay)
 
 	games := []ScheduleGame{}
@@ -272,26 +295,6 @@ func main() {
 
 	for _, g := range data.Dates[0].Games {
 		games = append(games, g)
-		// OLD SHIT
-		// filename := fmt.Sprintf("%v/%v", gameDay.Format("2006-01-02"), g.GamePk)
-		// if _, err := os.Stat(filename); os.IsNotExist(err) {
-		// 	// file doesn't exist -- check to see if we need to write it
-		// 	if "F" == g.Status.AbstractGameCode {
-		// 		// game is final -- check for save
-		// 		if nil != g.Decisions.Save {
-		// 			// tweet out the saver of the game w/ score
-		// 			fmt.Printf("Save: %v (%v)\n%v\n\nFinal: %v\n\n\n", g.Decisions.Save.FullName, g.Decisions.Save.Stats[3].Stats.Saves, getPitcherStatLine(g.Decisions.Save), getGameScoreString(g))
-		// 		}
-
-		// 		// write this pk to disk so we dont send it out again
-		// 		fileWriteErr := ioutil.WriteFile(filename, []byte(""), 0666)
-
-		// 		if nil != fileWriteErr {
-		// 			log.Fatal(err)
-		// 		}
-
-		// 	}
-		// }
 	}
 
 	numGames := len(games)
@@ -309,18 +312,16 @@ func main() {
 				_, err := tweet(n.Tweet)
 
 				if nil != err {
-					time.Sleep(7 * time.Second)
 					fmt.Println("EFFF")
 					fmt.Println(err)
 				}
 			}
 
-			// fmt.Println(n.Game.Status.AbstractGameCode)
 			if "F" != n.Game.Status.AbstractGameCode {
 				time.Sleep(time.Second * 10)
 				parseGameData(n.Game, c)
 			} else {
-				numGames--
+				// numGames--
 
 				if numGames <= 0 {
 					close(c)
@@ -331,6 +332,11 @@ func main() {
 
 	// close(c)
 	fmt.Println("Done for the day!!")
+
+	err = os.Remove(gameDay.Format("2006-01-02"))
+	if err != nil {
+		panic(err)
+	}
 
 	/**
 	// http.HandleFunc("/", homePage)

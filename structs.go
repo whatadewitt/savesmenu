@@ -26,7 +26,7 @@ type Game struct {
 	Meta                GameMeta          `json:"game"`
 	Datetime            Datetime          `json:"datetime"`
 	Status              GameStatus        `json:"status"`
-	Teams               Teams             `json:"teams"`
+	Teams               GameTeams         `json:"teams"`
 	Players             map[string]Player `json:"players"`
 	Venue               Venue             `json:"venue"`
 	OfficialVenue       OfficialVenue     `json:"officialVenue"`
@@ -39,6 +39,11 @@ type Game struct {
 	OfficialScorer      Person            `json:"officialScorer"`
 	PrimaryDatacaster   Person            `json:"primaryDatacaster"`
 	SecondaryDatacaster Person            `json:"secondaryDatacaster"`
+}
+
+type GameTeams struct {
+	Away Team `json:"away"`
+	Home Team `json:"home"`
 }
 
 type OfficialVenue struct {
@@ -95,6 +100,7 @@ type LiveData struct {
 
 type Plays struct {
 	AllPlays      []Play          `json:"allPlays"`
+	About         About           `json:"about"`
 	CurrentPlay   Play            `json:"currentPlay"`
 	ScoringPlays  []int           `json:"scoringPlays"`
 	PlaysByInning []PlaysByInning `json:"playsByInning"`
