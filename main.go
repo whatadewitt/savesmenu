@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -10,6 +13,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/dghubble/oauth1"
 	"github.com/joho/godotenv"
 )
@@ -88,9 +94,26 @@ func parseScoreboardData(gameDay time.Time) (ScheduleData, error) {
 
 // save a game state to the "cache"
 func (g GameCache) saveToFile(game ScheduleGame) error {
+	cfg, err := config.LoadDefaultConfig(context.TODO())
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Sprintf("%+v", game)
+
+	client := s3.NewFromConfig(cfg)
 	marshalledGame, _ := json.Marshal(g)
 
-	return ioutil.WriteFile(fmt.Sprintf("%v/%v.json", game.GameDate.Format("2006-01-02"), game.GamePk), marshalledGame, 0666)
+	input := &s3.PutObjectInput{
+		Bucket: aws.String("savesmenu"),
+		Key:    aws.String(fmt.Sprintf(fmt.Sprintf("%v/%v.json", game.GameDate.Format("2006-01-02"), game.GamePk))),
+		Body:   bytes.NewReader(marshalledGame),
+	}
+
+	_, err = client.PutObject(context.TODO(), input)
+
+	return err
 }
 
 // build a string representing the team's score during a game
@@ -131,21 +154,44 @@ func getGameScoreString(g Boxscore) string {
 
 func loadCacheForGame(game ScheduleGame) (GameCache, error) {
 	cache := GameCache{}
+	cfg, err := config.LoadDefaultConfig(context.TODO())
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	filename := fmt.Sprintf("%v/%v.json", game.GameDate.Format("2006-01-02"), game.GamePk)
 
-	if _, err := os.Stat(filename); os.IsNotExist(err) {
+	client := s3.NewFromConfig(cfg)
+	params := &s3.GetObjectInput{
+		Bucket: aws.String("savesmenu"),
+		Key:    aws.String(filename),
+	}
+
+	resp, err := client.GetObject(context.TODO(), params)
+
+	if nil != err {
 		fmt.Printf("New game: %v, will need to create a new cache\n", game.GamePk)
-	} else {
-		jsonData, _ := os.Open(filename)
-		defer jsonData.Close()
+	}
 
-		jsonBytes, _ := ioutil.ReadAll(jsonData)
-		jsonErr := json.Unmarshal(jsonBytes, &cache)
-
-		if jsonErr != nil {
-			// TODO: better error handling
-			return cache, jsonErr
+	sz := int(resp.ContentLength)
+	buffer := make([]byte, sz)
+	defer resp.Body.Close()
+	var bbuffer bytes.Buffer
+	for true {
+		num, rerr := resp.Body.Read(buffer)
+		if num > 0 {
+			bbuffer.Write(buffer[:num])
+		} else if rerr == io.EOF || rerr != nil {
+			break
 		}
+	}
+
+	jsonErr := json.Unmarshal([]byte(bbuffer.String()), &cache)
+
+	if jsonErr != nil {
+		// TODO: better error handling
+		return cache, jsonErr
 	}
 
 	return cache, nil
@@ -197,8 +243,6 @@ func parseGameData(game ScheduleGame, c chan CloserNews) {
 	}
 
 	box := data.LiveData.Boxscore
-
-	// fmt.Printf("CHECKING %v @ %v\n", box.Teams.Away.Team.Name, box.Teams.Home.Team.Name)
 
 	// if top of inning need to look at home team pitchers
 	// if bottom look at away team pitchers
@@ -280,19 +324,6 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// commented out because it breaks everything
-	// if 0 == data.Dates[0].TotalGamesInProgress {
-	// 	os.Exit(1)
-	// }
-
-	if _, err := os.Stat(gameDay.Format("2006-01-02")); os.IsNotExist(err) {
-		// path/to/whatever does not exist
-		e := os.Mkdir(gameDay.Format("2006-01-02"), 0755)
-		if e != nil {
-			panic(e)
-		}
-	}
-
 	for _, g := range data.Dates[0].Games {
 		games = append(games, g)
 	}
@@ -337,26 +368,4 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-
-	/**
-	// http.HandleFunc("/", homePage)
-	// log.Fatal(http.ListenAndServe(":8081", nil))
-
-	// TODO: i could pull each of the games in, and use the individual game url in a goroutine for each game. as a game ends, i could "close" the channel?
-	// better or worse than an intermittent lambda fucntion?
-
-	if gameDay.Hour() < 23 { // TODO: this will be a different number when i want to actually run this thing for a day or two straight
-		gameDay = gameDay.AddDate(0, 0, -1)
-	}
-
-
-
-	data, err := parseScoreboardData(gameDay)
-
-	if nil != err {
-		log.Fatal(err)
-	}
-	**/
 }
-
-// TODO - holds, blown saves
