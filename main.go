@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"strings"
@@ -170,6 +171,7 @@ func loadCacheForGame(game ScheduleGame) (GameCache, error) {
 
 	if nil != err {
 		fmt.Printf("New game: %v, will need to create a new cache\n", game.GamePk)
+		return cache, nil
 	}
 
 	sz := int(resp.ContentLength)
@@ -209,10 +211,12 @@ func (gc GameCache) containsPitcher(key string) bool {
 func parseGameData(game ScheduleGame, c chan CloserNews) {
 	data := GameData{}
 
+	fmt.Printf("checking %v @ %v\n", game.Teams.Away.Team.Abbreviation, game.Teams.Home.Team.Abbreviation)
 	if time.Now().Before(game.GameDate) {
-		// fmt.Println("Game Hasn't Started")
+		fmt.Println("Game Hasn't Started")
 		c <- CloserNews{
-			Game: game,
+			Game:           game,
+			DelayInSeconds: int(math.Round(game.GameDate.Sub(time.Now()).Seconds())),
 		}
 		return
 	}
@@ -255,6 +259,15 @@ func parseGameData(game ScheduleGame, c chan CloserNews) {
 		players[k] = v
 	}
 
+	inning := data.LiveData.Plays.About.Inning
+	halfInning := data.LiveData.Plays.About.HalfInning
+	gameInning := fmt.Sprintf("%v %v", halfInning, inning)
+
+	delay := 300
+	if inning > 5 {
+		delay = 40
+	}
+
 	for k, v := range players {
 		if 0 < v.Stats.Pitching.GamesPlayed && "" != v.Stats.Pitching.Note && 0 == v.Stats.Pitching.GamesStarted && !cache.containsPitcher(k) { // && !v.GameStatus.IsCurrentPitcher {
 			cache.Status = data.GameData.Status.AbstractGameCode
@@ -277,10 +290,6 @@ func parseGameData(game ScheduleGame, c chan CloserNews) {
 				count = v.SeasonStats.Pitching.Losses
 			}
 
-			inning := data.LiveData.Plays.About.Inning
-			halfInning := data.LiveData.Plays.About.HalfInning
-			gameInning := fmt.Sprintf("%v %v", halfInning, inning)
-
 			// TODO: check here for game end too
 			if 9 >= inning {
 				if ("top" == halfInning && box.Teams.Home.TeamStats.Batting.Runs > box.Teams.Away.TeamStats.Batting.Runs) || ("bottom" == halfInning && box.Teams.Home.TeamStats.Batting.Runs != box.Teams.Away.TeamStats.Batting.Runs) {
@@ -288,10 +297,10 @@ func parseGameData(game ScheduleGame, c chan CloserNews) {
 				}
 			}
 
-			// TODO: not final...
 			c <- CloserNews{
-				Tweet: fmt.Sprintf(`%v (%v) - %v (%v)\n%v\n\%v: %v`, v.Person.FullName, teams[v.ParentTeamID], stat, count, getPitcherStatLine(&v), gameInning, getGameScoreString(box)),
-				Game:  game,
+				Tweet:          fmt.Sprintf(`%v (%v) - %v (%v)\n%v\n\%v: %v`, v.Person.FullName, teams[v.ParentTeamID], stat, count, getPitcherStatLine(&v), gameInning, getGameScoreString(box)),
+				Game:           game,
+				DelayInSeconds: delay,
 			}
 		}
 	}
@@ -305,15 +314,24 @@ func parseGameData(game ScheduleGame, c chan CloserNews) {
 
 	// return data, nil
 	c <- CloserNews{
-		Game: game,
+		Game:           game,
+		DelayInSeconds: delay,
 	}
 }
 
 func main() {
 	godotenv.Load()
 
+	cfg, err := config.LoadDefaultConfig(context.TODO())
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	client := s3.NewFromConfig(cfg)
+
 	gameDay := time.Now()
-	gameDay = gameDay.AddDate(0, 0, -1)
+	// gameDay = gameDay.AddDate(0, 0, -1)
 	data, err := parseScoreboardData(gameDay)
 
 	games := []ScheduleGame{}
@@ -337,7 +355,6 @@ func main() {
 	for news := range c {
 		go func(n CloserNews) {
 			if "" != n.Tweet {
-				// fmt.Println(n.Tweet)
 				_, err := tweet(n.Tweet)
 
 				if nil != err {
@@ -347,30 +364,36 @@ func main() {
 			}
 
 			if "F" != n.Game.Status.AbstractGameCode {
-				time.Sleep(time.Second * 10)
+				fmt.Printf("%v %v\n", n.DelayInSeconds, n.Game.Teams.Home.Team.Abbreviation)
+				time.Sleep(time.Second * time.Duration(n.DelayInSeconds))
 				parseGameData(n.Game, c)
 			} else {
-				// numGames--
+				numGames--
 
-				if numGames <= 0 {
-					close(c)
+				params := &s3.DeleteObjectInput{
+					Bucket: aws.String("savesmenu"),
+					Key:    aws.String(fmt.Sprintf("%v/%v.json", n.Game.GameDate.Format("2006-01-02"), n.Game.GamePk)),
 				}
+				delObj, err := client.DeleteObject(context.TODO(), params)
+
+				if err != nil {
+					log.Fatal(err)
+				}
+
+				fmt.Printf("%+v", delObj)
+
+				// if numGames <= 0 {
+				// 	close(c)
+				// }
 			}
 		}(news)
 	}
 
 	fmt.Println("Done for the day!!")
 
-	cfg, err := config.LoadDefaultConfig(context.TODO())
-
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	client := s3.NewFromConfig(cfg)
 	params := &s3.DeleteObjectInput{
 		Bucket: aws.String("savesmenu"),
-		Key:    aws.String(gameDay.Format("Mon Jan 02 2006")),
+		Key:    aws.String(gameDay.Format("2006-01-02")),
 	}
 	delObj, err := client.DeleteObject(context.TODO(), params)
 

@@ -939,6 +939,7 @@ type GameCache struct {
 }
 
 type CloserNews struct {
-	Tweet string
-	Game  ScheduleGame
+	Tweet          string
+	Game           ScheduleGame
+	DelayInSeconds int
 }
