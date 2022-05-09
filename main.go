@@ -100,8 +100,6 @@ func (g GameCache) saveToFile(game ScheduleGame) error {
 		log.Fatal(err)
 	}
 
-	fmt.Sprintf("%+v", game)
-
 	client := s3.NewFromConfig(cfg)
 	marshalledGame, _ := json.Marshal(g)
 
@@ -315,7 +313,7 @@ func main() {
 	godotenv.Load()
 
 	gameDay := time.Now()
-	// gameDay = gameDay.AddDate(0, 0, -1)
+	gameDay = gameDay.AddDate(0, 0, -1)
 	data, err := parseScoreboardData(gameDay)
 
 	games := []ScheduleGame{}
@@ -361,11 +359,24 @@ func main() {
 		}(news)
 	}
 
-	// close(c)
 	fmt.Println("Done for the day!!")
 
-	err = os.Remove(gameDay.Format("2006-01-02"))
+	cfg, err := config.LoadDefaultConfig(context.TODO())
+
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
+
+	client := s3.NewFromConfig(cfg)
+	params := &s3.DeleteObjectInput{
+		Bucket: aws.String("savesmenu"),
+		Key:    aws.String(gameDay.Format("Mon Jan 02 2006")),
+	}
+	delObj, err := client.DeleteObject(context.TODO(), params)
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Printf("%+v", delObj)
 }
